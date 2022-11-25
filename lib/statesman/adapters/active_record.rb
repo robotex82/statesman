@@ -32,12 +32,13 @@ module Statesman
         @transition_class = transition_class
         @transition_table = transition_class.arel_table
         @parent_model = parent_model
+        @connection = parent_model.class.connection
         @observer = observer
         @association_name =
           options[:association_name] || @transition_class.table_name
       end
 
-      attr_reader :transition_class, :transition_table, :parent_model
+      attr_reader :transition_class, :transition_table, :parent_model, :connection
 
       def create(from, to, metadata = {})
         create_transition(from.to_s, to.to_s, metadata)
@@ -117,6 +118,7 @@ module Statesman
 
         transition
       end
+      # rubocop:enable Metrics/MethodLength
 
       def default_transition_attributes(to, metadata)
         {
@@ -128,8 +130,8 @@ module Statesman
       end
 
       def add_after_commit_callback(from, to, transition)
-        ::ActiveRecord::Base.connection.add_transaction_record(
-          ActiveRecordAfterCommitWrap.new do
+        connection.add_transaction_record(
+          ActiveRecordAfterCommitWrap.new(connection) do
             @observer.execute(:after_commit, from, to, transition)
           end,
         )
@@ -152,7 +154,7 @@ module Statesman
         # most_recent before setting the new row to be true.
         update.order(transition_table[:most_recent].desc) if mysql_gaplock_protection?
 
-        ::ActiveRecord::Base.connection.update(update.to_sql)
+        connection.update(update.to_sql)
       end
 
       def most_recent_transitions(most_recent_id = nil)
@@ -250,7 +252,7 @@ module Statesman
       end
 
       def unique_indexes
-        ::ActiveRecord::Base.connection.
+        connection.
           indexes(transition_class.table_name).
           select do |index|
             next unless index.unique
@@ -321,11 +323,11 @@ module Statesman
       end
 
       def db_true
-        ::ActiveRecord::Base.connection.quote(type_cast(true))
+        connection.quote(type_cast(true))
       end
 
       def db_false
-        ::ActiveRecord::Base.connection.quote(type_cast(false))
+        connection.quote(type_cast(false))
       end
 
       def db_null
@@ -335,7 +337,7 @@ module Statesman
       # Type casting against a column is deprecated and will be removed in Rails 6.2.
       # See https://github.com/rails/arel/commit/6160bfbda1d1781c3b08a33ec4955f170e95be11
       def type_cast(value)
-        ::ActiveRecord::Base.connection.type_cast(value)
+        connection.type_cast(value)
       end
 
       # Check whether the `most_recent` column allows null values. If it doesn't, set old
@@ -355,9 +357,9 @@ module Statesman
     end
 
     class ActiveRecordAfterCommitWrap
-      def initialize(&block)
+      def initialize(connection, &block)
         @callback = block
-        @connection = ::ActiveRecord::Base.connection
+        @connection = connection
       end
 
       def self.trigger_transactional_callbacks?
